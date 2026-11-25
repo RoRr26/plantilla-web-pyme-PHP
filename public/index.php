@@ -16,7 +16,7 @@ $settings = $stmtSettings->fetch() ?: [
     'hero_subtitle' => 'Contáctanos para cotizar.',
 ];
 
-$stmtOfferings = $pdo->query('SELECT title, description, price FROM offerings WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
+$stmtOfferings = $pdo->query('SELECT title, description, price, image_path FROM offerings WHERE is_active = 1 ORDER BY sort_order ASC, id ASC');
 $offerings = $stmtOfferings->fetchAll();
 
 $cleanPhone = preg_replace('/\D+/', '', (string) $settings['whatsapp']);
@@ -62,6 +62,12 @@ $waUrl = "https://wa.me/{$cleanPhone}?text={$defaultMsg}";
           ?>
           <article class="bg-white rounded-xl p-5 border border-slate-200 flex flex-col justify-between">
             <div>
+              <?php if (!empty($item['image_path'])): ?>
+                <img src="<?= e((string) $item['image_path']) ?>"
+                     alt="<?= e((string) $item['title']) ?>"
+                     class="w-full h-40 object-cover rounded-lg mb-3">
+              <?php endif; ?>
+
               <div class="flex items-start justify-between gap-2 mb-2">
                 <h3 class="font-semibold text-lg text-slate-900"><?= e((string) $item['title']) ?></h3>
                 <span class="font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-md text-sm shrink-0">

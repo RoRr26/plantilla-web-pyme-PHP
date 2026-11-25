@@ -11,6 +11,74 @@ function e(string $value): string
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
 
+function handle_offering_image_upload(array $file): ?string
+{
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+
+    if (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Error al subir el archivo.');
+    }
+
+    $maxBytes = 2 * 1024 * 1024;
+    if (($file['size'] ?? 0) > $maxBytes) {
+        throw new RuntimeException('La imagen supera el límite de 2 MB.');
+    }
+
+    $tmpName = (string) ($file['tmp_name'] ?? '');
+    if ($tmpName === '' || !is_file($tmpName)) {
+        throw new RuntimeException('Archivo temporal no válido.');
+    }
+
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->file($tmpName);
+
+    $allowed = [
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp',
+    ];
+
+    if (!is_string($mime) || !isset($allowed[$mime])) {
+        throw new RuntimeException('Solo se permiten imágenes JPG, PNG o WEBP.');
+    }
+
+    $ext = $allowed[$mime];
+    $filename = bin2hex(random_bytes(16)) . '.' . $ext;
+    $destDir = __DIR__ . '/../public/uploads';
+
+    if (!is_dir($destDir) && !mkdir($destDir, 0755, true)) {
+        throw new RuntimeException('No se pudo crear la carpeta de imágenes.');
+    }
+
+    $destPath = $destDir . '/' . $filename;
+    if (!move_uploaded_file($tmpName, $destPath)) {
+        throw new RuntimeException('No se pudo guardar la imagen en el servidor.');
+    }
+
+    return 'uploads/' . $filename;
+}
+
+function delete_offering_image(?string $relativePath): void
+{
+    if (empty($relativePath)) {
+        return;
+    }
+
+    $clean = str_replace('\\', '/', $relativePath);
+    if (!str_starts_with($clean, 'uploads/')) {
+        return;
+    }
+
+    $baseDir = realpath(__DIR__ . '/../public/uploads');
+    $fullPath = realpath(__DIR__ . '/../public/' . $clean);
+
+    if ($baseDir !== false && $fullPath !== false && str_starts_with($fullPath, $baseDir . DIRECTORY_SEPARATOR) && is_file($fullPath)) {
+        @unlink($fullPath);
+    }
+}
+
 $flashSuccess = '';
 $flashError = '';
 
@@ -20,88 +88,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!verify_csrf_token(is_string($token) ? $token : null)) {
         $flashError = 'Token de seguridad inválido. Recarga la página e intenta nuevamente.';
-    } elseif ($action === 'update_settings') {
-        $businessName = trim((string) ($_POST['business_name'] ?? ''));
-        $whatsapp     = trim((string) ($_POST['whatsapp'] ?? ''));
-        $heroTitle    = trim((string) ($_POST['hero_title'] ?? ''));
-        $heroSubtitle = trim((string) ($_POST['hero_subtitle'] ?? ''));
+    } else {
+        try {
+            if ($action === 'update_settings') {
+                $businessName = trim((string) ($_POST['business_name'] ?? ''));
+                $whatsapp     = trim((string) ($_POST['whatsapp'] ?? ''));
+                $heroTitle    = trim((string) ($_POST['hero_title'] ?? ''));
+                $heroSubtitle = trim((string) ($_POST['hero_subtitle'] ?? ''));
 
-        if ($businessName === '' || $whatsapp === '' || $heroTitle === '' || $heroSubtitle === '') {
-            $flashError = 'Todos los campos generales son obligatorios.';
-        } else {
-            $stmt = $pdo->prepare(
-                'UPDATE site_settings
-                 SET business_name = :business_name,
-                     whatsapp = :whatsapp,
-                     hero_title = :hero_title,
-                     hero_subtitle = :hero_subtitle
-                 WHERE id = 1'
-            );
-            $stmt->execute([
-                'business_name' => $businessName,
-                'whatsapp'      => $whatsapp,
-                'hero_title'    => $heroTitle,
-                'hero_subtitle' => $heroSubtitle,
-            ]);
-            $flashSuccess = 'Datos del sitio actualizados correctamente.';
-        }
-    } elseif ($action === 'add_offering') {
-        $title       = trim((string) ($_POST['title'] ?? ''));
-        $description = trim((string) ($_POST['description'] ?? ''));
-        $price       = trim((string) ($_POST['price'] ?? ''));
-        $sortOrder   = (int) ($_POST['sort_order'] ?? 0);
+                if ($businessName === '' || $whatsapp === '' || $heroTitle === '' || $heroSubtitle === '') {
+                    $flashError = 'Todos los campos generales son obligatorios.';
+                } else {
+                    $stmt = $pdo->prepare(
+                        'UPDATE site_settings
+                         SET business_name = :business_name,
+                             whatsapp = :whatsapp,
+                             hero_title = :hero_title,
+                             hero_subtitle = :hero_subtitle
+                         WHERE id = 1'
+                    );
+                    $stmt->execute([
+                        'business_name' => $businessName,
+                        'whatsapp'      => $whatsapp,
+                        'hero_title'    => $heroTitle,
+                        'hero_subtitle' => $heroSubtitle,
+                    ]);
+                    $flashSuccess = 'Datos del sitio actualizados correctamente.';
+                }
+            } elseif ($action === 'add_offering') {
+                $title       = trim((string) ($_POST['title'] ?? ''));
+                $description = trim((string) ($_POST['description'] ?? ''));
+                $price       = trim((string) ($_POST['price'] ?? ''));
+                $sortOrder   = (int) ($_POST['sort_order'] ?? 0);
 
-        if ($title === '' || $description === '' || $price === '') {
-            $flashError = 'Completa título, descripción y precio para agregar el servicio.';
-        } else {
-            $stmt = $pdo->prepare(
-                'INSERT INTO offerings (title, description, price, is_active, sort_order)
-                 VALUES (:title, :description, :price, 1, :sort_order)'
-            );
-            $stmt->execute([
-                'title'       => $title,
-                'description' => $description,
-                'price'       => $price,
-                'sort_order'  => $sortOrder,
-            ]);
-            $flashSuccess = 'Servicio agregado correctamente.';
-        }
-    } elseif ($action === 'update_offering') {
-        $id          = (int) ($_POST['id'] ?? 0);
-        $title       = trim((string) ($_POST['title'] ?? ''));
-        $description = trim((string) ($_POST['description'] ?? ''));
-        $price       = trim((string) ($_POST['price'] ?? ''));
-        $sortOrder   = (int) ($_POST['sort_order'] ?? 0);
-        $isActive    = isset($_POST['is_active']) ? 1 : 0;
+                if ($title === '' || $description === '' || $price === '') {
+                    $flashError = 'Completa título, descripción y precio para agregar el servicio.';
+                } else {
+                    $imagePath = handle_offering_image_upload($_FILES['image'] ?? []);
 
-        if ($id <= 0 || $title === '' || $description === '' || $price === '') {
-            $flashError = 'Datos incompletos para actualizar el servicio.';
-        } else {
-            $stmt = $pdo->prepare(
-                'UPDATE offerings
-                 SET title = :title,
-                     description = :description,
-                     price = :price,
-                     sort_order = :sort_order,
-                     is_active = :is_active
-                 WHERE id = :id'
-            );
-            $stmt->execute([
-                'id'          => $id,
-                'title'       => $title,
-                'description' => $description,
-                'price'       => $price,
-                'sort_order'  => $sortOrder,
-                'is_active'   => $isActive,
-            ]);
-            $flashSuccess = 'Servicio actualizado.';
-        }
-    } elseif ($action === 'delete_offering') {
-        $id = (int) ($_POST['id'] ?? 0);
-        if ($id > 0) {
-            $stmt = $pdo->prepare('DELETE FROM offerings WHERE id = :id');
-            $stmt->execute(['id' => $id]);
-            $flashSuccess = 'Servicio eliminado.';
+                    $stmt = $pdo->prepare(
+                        'INSERT INTO offerings (title, description, price, image_path, is_active, sort_order)
+                         VALUES (:title, :description, :price, :image_path, 1, :sort_order)'
+                    );
+                    $stmt->execute([
+                        'title'       => $title,
+                        'description' => $description,
+                        'price'       => $price,
+                        'image_path'  => $imagePath,
+                        'sort_order'  => $sortOrder,
+                    ]);
+                    $flashSuccess = 'Servicio agregado correctamente.';
+                }
+            } elseif ($action === 'update_offering') {
+                $id          = (int) ($_POST['id'] ?? 0);
+                $title       = trim((string) ($_POST['title'] ?? ''));
+                $description = trim((string) ($_POST['description'] ?? ''));
+                $price       = trim((string) ($_POST['price'] ?? ''));
+                $sortOrder   = (int) ($_POST['sort_order'] ?? 0);
+                $isActive    = isset($_POST['is_active']) ? 1 : 0;
+
+                if ($id <= 0 || $title === '' || $description === '' || $price === '') {
+                    $flashError = 'Datos incompletos para actualizar el servicio.';
+                } else {
+                    $stmtCurrent = $pdo->prepare('SELECT image_path FROM offerings WHERE id = :id LIMIT 1');
+                    $stmtCurrent->execute(['id' => $id]);
+                    $current = $stmtCurrent->fetch();
+
+                    if (!$current) {
+                        $flashError = 'El servicio no existe.';
+                    } else {
+                        $newImagePath = handle_offering_image_upload($_FILES['image'] ?? []);
+                        $finalImagePath = $current['image_path'];
+
+                        if ($newImagePath !== null) {
+                            delete_offering_image((string) ($current['image_path'] ?? ''));
+                            $finalImagePath = $newImagePath;
+                        }
+
+                        $stmt = $pdo->prepare(
+                            'UPDATE offerings
+                             SET title = :title,
+                                 description = :description,
+                                 price = :price,
+                                 image_path = :image_path,
+                                 sort_order = :sort_order,
+                                 is_active = :is_active
+                             WHERE id = :id'
+                        );
+                        $stmt->execute([
+                            'id'          => $id,
+                            'title'       => $title,
+                            'description' => $description,
+                            'price'       => $price,
+                            'image_path'  => $finalImagePath,
+                            'sort_order'  => $sortOrder,
+                            'is_active'   => $isActive,
+                        ]);
+                        $flashSuccess = 'Servicio actualizado.';
+                    }
+                }
+            } elseif ($action === 'delete_offering') {
+                $id = (int) ($_POST['id'] ?? 0);
+                if ($id > 0) {
+                    $stmtCurrent = $pdo->prepare('SELECT image_path FROM offerings WHERE id = :id LIMIT 1');
+                    $stmtCurrent->execute(['id' => $id]);
+                    $current = $stmtCurrent->fetch();
+
+                    $stmt = $pdo->prepare('DELETE FROM offerings WHERE id = :id');
+                    $stmt->execute(['id' => $id]);
+
+                    if ($current && !empty($current['image_path'])) {
+                        delete_offering_image((string) $current['image_path']);
+                    }
+                    $flashSuccess = 'Servicio eliminado.';
+                }
+            }
+        } catch (RuntimeException $e) {
+            $flashError = $e->getMessage();
         }
     }
 }
@@ -202,7 +305,7 @@ $csrf = csrf_token();
     <!-- Sección 2: Agregar nuevo servicio -->
     <section class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
       <h2 class="text-lg font-bold text-slate-900 mb-4">2. Agregar nuevo servicio o producto</h2>
-      <form method="POST" class="space-y-4">
+      <form method="POST" enctype="multipart/form-data" class="space-y-4">
         <input type="hidden" name="csrf_token" value="<?= e($csrf) ?>">
         <input type="hidden" name="action" value="add_offering">
 
@@ -220,7 +323,7 @@ $csrf = csrf_token();
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div class="md:col-span-3">
+          <div class="md:col-span-2">
             <label class="block text-sm font-medium text-slate-700 mb-1">Descripción</label>
             <input type="text" name="description" required placeholder="Breve detalle de lo que incluye"
                    class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
@@ -229,6 +332,11 @@ $csrf = csrf_token();
             <label class="block text-sm font-medium text-slate-700 mb-1">Orden</label>
             <input type="number" name="sort_order" value="0"
                    class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-1">Imagen (JPG, PNG, WEBP, máx. 2 MB)</label>
+            <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                   class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-sm">
           </div>
         </div>
 
@@ -249,10 +357,19 @@ $csrf = csrf_token();
         <div class="space-y-4">
           <?php foreach ($offerings as $item): ?>
             <div class="border border-slate-200 rounded-xl p-4 bg-slate-50">
-              <form method="POST" class="space-y-3">
+              <form method="POST" enctype="multipart/form-data" class="space-y-3">
                 <input type="hidden" name="csrf_token" value="<?= e($csrf) ?>">
                 <input type="hidden" name="action" value="update_offering">
                 <input type="hidden" name="id" value="<?= (int) $item['id'] ?>">
+
+                <?php if (!empty($item['image_path'])): ?>
+                  <div class="flex items-center gap-3">
+                    <img src="<?= e((string) $item['image_path']) ?>"
+                         alt="<?= e((string) $item['title']) ?>"
+                         class="w-16 h-16 object-cover rounded-lg border border-slate-200">
+                    <span class="text-xs text-slate-500">Imagen actual cargada. Sube otra solo si quieres reemplazarla.</span>
+                  </div>
+                <?php endif; ?>
 
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div class="md:col-span-2">
@@ -272,10 +389,17 @@ $csrf = csrf_token();
                   </div>
                 </div>
 
-                <div>
-                  <label class="block text-xs font-medium text-slate-600 mb-1">Descripción</label>
-                  <input type="text" name="description" required value="<?= e((string) $item['description']) ?>"
-                         class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div class="md:col-span-2">
+                    <label class="block text-xs font-medium text-slate-600 mb-1">Descripción</label>
+                    <input type="text" name="description" required value="<?= e((string) $item['description']) ?>"
+                           class="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-sm">
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium text-slate-600 mb-1">Cambiar imagen (opcional)</label>
+                    <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                           class="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs">
+                  </div>
                 </div>
 
                 <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
@@ -284,12 +408,10 @@ $csrf = csrf_token();
                     Visible en la página pública
                   </label>
 
-                  <div class="flex items-center gap-2">
-                    <button type="submit"
-                            class="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-4 py-2 rounded-lg transition">
-                      Guardar
-                    </button>
-                  </div>
+                  <button type="submit"
+                          class="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-4 py-2 rounded-lg transition">
+                    Guardar
+                  </button>
                 </div>
               </form>
 
