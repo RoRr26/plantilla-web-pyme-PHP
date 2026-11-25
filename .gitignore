@@ -1,0 +1,13 @@
+# Archivos de prueba o sensibles
+admin/crear_admin.php
+config/config.local.php
+
+# Imágenes subidas de prueba
+public/uploads/*
+!public/uploads/.gitkeep
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
